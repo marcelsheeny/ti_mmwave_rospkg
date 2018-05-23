@@ -58,6 +58,9 @@
 #include <pcl/point_types.h>
 #include <pthread.h>
 
+// include OpenCV
+#include <opencv2/opencv.hpp>
+
 DataUARTHandler::DataUARTHandler(ros::NodeHandle *nh) {
   this->currentBufp = (&pingPongBuffers[0]);
   this->nextBufp = (&pingPongBuffers[1]);
@@ -92,6 +95,10 @@ DataUARTHandler::DataUARTHandler(ros::NodeHandle *nh) {
   nh->getParam("/mmWave_Manager/idleTime", idleTime);
   nh->getParam("/mmWave_Manager/rampEndTime", rampEndTime);
 
+  // params for heatmap
+  nh->getParam("/mmWave_Manager/numRxAnt", numRxAnt);
+  nh->getParam("/mmWave_Manager/numTxAzimAnt", numTxAzimAnt);
+
   int numChirpsPerFrame = (chirpEndIdx - chirpStartIdx + 1) * numLoops;
 
   numRangeBins = 1 << (int)std::ceil(std::log2(numAdcSamples));
@@ -104,9 +111,9 @@ DataUARTHandler::DataUARTHandler(ros::NodeHandle *nh) {
              numChirpsPerFrame);
 
   ROS_INFO("Configured DataHandler numRangeBins: %d numDopplerBins: %d "
-           "rangeIdxToM: %f dopplerResToMps: %f",
+           "rangeIdxToM: %f dopplerResToMps: %f numTxAzimAnt: %d numRxAnt: %d",
            numRangeBins, numDopplerBins, rangeIdxToMeters,
-           dopplerResolutionToMps);
+           dopplerResolutionToMps, numTxAzimAnt, numRxAnt);
 }
 
 /*Implementation of setUARTPort*/
@@ -570,9 +577,10 @@ void *DataUARTHandler::sortIncomingData(void) {
       i = 0;
 
       while (i++ < tlvLen - 1) {
-        ROS_INFO("DataUARTHandler Sort Thread : Parsing Range Profile i=%d and "
-                 "tlvLen = %u",
-                 i, tlvLen);
+        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Range Profile i=%d
+        // and "
+        //         "tlvLen = %u",
+        //         i, tlvLen);
       }
 
       // memcpy(&mmwData.objOut.rangeIdx, &currentBufp->at(currentDatap),
@@ -581,20 +589,19 @@ void *DataUARTHandler::sortIncomingData(void) {
 
       // ROS_INFO("DATA %d", )
 
-      std::ofstream myfile;
-      myfile.open("/home/marcel/catkin_ws/example.txt");
-
-      for (size_t i = 0; i < 256; i++) {
-        // uint16_t value = (uint16_t)currentBufp->at(currentDatap + i * 2);
-        uint16_t value;
-        memcpy(&value, &currentBufp->at(currentDatap + i * 2), sizeof(value));
-        ROS_INFO("value: %d\n", value);
-        myfile << static_cast<int>(value);
-        myfile << ",";
-      }
-
-      myfile << "\nEND";
-      myfile.close();
+      // std::ofstream myfile;
+      // myfile.open("/home/marcel/catkin_ws/example.txt");
+      //
+      // for (size_t i = 0; i < 256; i++) {
+      //   // uint16_t value = (uint16_t)currentBufp->at(currentDatap + i * 2);
+      //   uint16_t value;
+      //   memcpy(&value, &currentBufp->at(currentDatap + i * 2),
+      //   sizeof(value)); ROS_INFO("value: %d\n", value); myfile <<
+      //   static_cast<int>(value); myfile << ",";
+      // }
+      //
+      // myfile << "\nEND";
+      // myfile.close();
 
       currentDatap += tlvLen;
 
@@ -607,10 +614,10 @@ void *DataUARTHandler::sortIncomingData(void) {
 
       i = 0;
 
-      while (i++ < tlvLen - 1) {
-        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Noise Profile i=%d
-        // and tlvLen = %u", i, tlvLen);
-      }
+      // while (i++ < tlvLen - 1) {
+      //   // ROS_INFO("DataUARTHandler Sort Thread : Parsing Noise Profile i=%d
+      //   // and tlvLen = %u", i, tlvLen);
+      // }
 
       currentDatap += tlvLen;
 
@@ -623,11 +630,33 @@ void *DataUARTHandler::sortIncomingData(void) {
 
       i = 0;
 
-      while (i++ < tlvLen - 1) {
-        ROS_INFO("DataUARTHandler Sort Thread : Parsing Azimuth Profile i=%d "
-                 "and tlvLen = %u",
-                 i, tlvLen);
-      }
+      // while (i++ < tlvLen - 1) {
+      //   // ROS_INFO("DataUARTHandler Sort Thread : Parsing Azimuth Profile
+      //   i=%d
+      //   // "
+      //   //          "and tlvLen = %u",
+      //   //          i, tlvLen);
+      // }
+
+      int numBytes = numTxAzimAnt * numRxAnt * numRangeBins * 4;
+
+      ROS_INFO("%d", numBytes);
+      ROS_INFO("numBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByte"
+               "snumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByt"
+               "esnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBy"
+               "tesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumB"
+               "ytesnumBytes");
+
+      unsigned char q[numBytes];
+      memcpy(q, &currentBufp->at(currentDatap), numBytes);
+
+      int qrows = numTxAzimAnt * numRxAnt;
+      int qcols = numRangeBins;
+      ROS_INFO("rows: %d, cols: %d", qrows, qcols);
+
+      // for (size_t i = 0; i < numBytes; i++) {
+      //   ROS_INFO("%d ", q[i]);
+      // }
 
       currentDatap += tlvLen;
 
@@ -716,7 +745,7 @@ void *DataUARTHandler::sortIncomingData(void) {
           break;
 
         case MMWDEMO_OUTPUT_MSG_AZIMUTH_STATIC_HEAT_MAP:
-          ROS_INFO("DataUARTHandler Sort Thread : Azimuth Heat TLV");
+          // ROS_INFO("DataUARTHandler Sort Thread : Azimuth Heat TLV");
           sorterState = READ_AZIMUTH;
           break;
 

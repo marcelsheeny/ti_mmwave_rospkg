@@ -23,6 +23,8 @@ find_package(Threads REQUIRED)
 
 find_package(PCL 1.7.2 REQUIRED)
 
+find_package(OpenCV REQUIRED)
+
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
 
