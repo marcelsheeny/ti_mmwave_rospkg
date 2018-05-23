@@ -303,6 +303,34 @@ void *DataUARTHandler::syncedBufferSwap(void) {
   pthread_exit(NULL);
 }
 
+void displayNormalized(char *header, cv::Mat img) {
+  double min, max;
+  cv::minMaxLoc(img, &min, &max);
+  cv::Mat img_n = ((img - min) / (max - min)) * 255.0f;
+  img_n.convertTo(img_n, CV_8UC1);
+  cv::applyColorMap(img_n, img_n, cv::COLORMAP_HOT);
+  cv::resize(img_n, img_n, cv::Size(), 3, 3);
+  cv::imshow(header, img_n);
+}
+
+void shiftCols(cv::Mat &QQ) {
+  int NUM_ANGLE_BINS = QQ.rows;
+  int NUM_RANGE_BINS = QQ.cols;
+  for (size_t tmpc = 0; tmpc < NUM_RANGE_BINS; tmpc++) {
+    cv::Mat temp1 =
+        QQ(cv::Range(0, NUM_ANGLE_BINS / 2), cv::Range(tmpc, tmpc + 1));
+
+    // ROS_INFO("%d %d", temp1.rows, temp1.cols);
+    cv::Mat temp2 = QQ(cv::Range(NUM_ANGLE_BINS / 2, NUM_ANGLE_BINS),
+                       cv::Range(tmpc, tmpc + 1));
+
+    // ROS_INFO("%d %d", temp2.rows, temp2.cols);
+    cv::Mat temp;
+    cv::vconcat(temp2, temp1, temp);
+    temp.copyTo(QQ.col(tmpc));
+  }
+}
+
 void *DataUARTHandler::sortIncomingData(void) {
   MmwDemo_Output_TLV_Types tlvType = MMWDEMO_OUTPUT_MSG_NULL;
   uint32_t tlvLen = 0;
@@ -639,20 +667,93 @@ void *DataUARTHandler::sortIncomingData(void) {
       // }
 
       int numBytes = numTxAzimAnt * numRxAnt * numRangeBins * 4;
-
-      ROS_INFO("%d", numBytes);
-      ROS_INFO("numBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByte"
-               "snumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByt"
-               "esnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBy"
-               "tesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumB"
-               "ytesnumBytes");
+      constexpr int NUM_ANGLE_BINS = 64;
 
       unsigned char q[numBytes];
       memcpy(q, &currentBufp->at(currentDatap), numBytes);
 
+      // for (size_t i = 0; i < numBytes; i++) {
+      //   ROS_INFO("%d", q[i]);
+      // }
+      // ROS_INFO("%d", numBytes);
+      // ROS_INFO("numBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByte"
+      //          "snumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByt"
+      //          "esnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBy"
+      //          "tesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumB"
+      //          "ytesnumBytes");
+
       int qrows = numTxAzimAnt * numRxAnt;
       int qcols = numRangeBins;
-      ROS_INFO("rows: %d, cols: %d", qrows, qcols);
+      int qidx = 0;
+      // ROS_INFO("rows: %d, cols: %d", qrows, qcols);
+
+      cv::Mat QQ = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
+      cv::Mat phase = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
+
+      for (int tmpc = 0; tmpc < qcols; tmpc++) {
+        cv::Mat real = cv::Mat::zeros(1, NUM_ANGLE_BINS, CV_32F);
+
+        cv::Mat imag = cv::Mat::zeros(1, NUM_ANGLE_BINS, CV_32F);
+
+        for (int tmpr = 0; tmpr < qrows; tmpr++) {
+          real.at<float>(0, tmpr) = q[qidx + 1] * 256 + q[qidx];
+          if (real.at<float>(0, tmpr) > 32767)
+            real.at<float>(0, tmpr) = real.at<float>(0, tmpr) - 65536;
+
+          imag.at<float>(0, tmpr) = q[qidx + 3] * 256 + q[qidx + 2];
+          if (imag.at<float>(0, tmpr) > 32767)
+            imag.at<float>(0, tmpr) = imag.at<float>(0, tmpr) - 65536;
+
+          qidx = qidx + 4;
+        }
+
+        // for (size_t i = 0; i < NUM_ANGLE_BINS; i++) {
+        //   ROS_INFO("real %f", real.at<float>(0, i));
+        // }
+        //
+        // for (size_t i = 0; i < NUM_ANGLE_BINS; i++) {
+        //   ROS_INFO("imag %f", imag.at<float>(0, i));
+        // }
+
+        // create complex from real and imag
+        cv::Mat complexDataPlanes[] = {real, imag};
+        cv::Mat complexData;
+        cv::merge(complexDataPlanes, 2, complexData);
+
+        // apply fft
+        cv::Mat complexRange;
+        cv::dft(complexData, complexRange);
+
+        // get real and imaginary
+        cv::Mat complexRangePlanes[2];
+        cv::split(complexRange, complexRangePlanes);
+
+        // compute abs
+        for (int ri = 0; ri < NUM_ANGLE_BINS; ri++) {
+          float real = complexRangePlanes[0].at<float>(0, ri);
+          float imag = complexRangePlanes[1].at<float>(0, ri);
+          float rng_value = sqrt(real * real + imag * imag);
+          float phase_value = atan2(imag, real);
+          // ROS_INFO("rng_value %f", rng_value);
+          // QQ.at<float>(ri, tmpc) = 20 * log10(rng_value);
+          QQ.at<float>(ri, tmpc) = rng_value;
+          phase.at<float>(ri, tmpc) = phase_value;
+        }
+        // QQ(cv::Range())
+        //   QQ.push(real.slice(NUM_ANGLE_BINS / 2)
+        //               .concat(real.slice(0, NUM_ANGLE_BINS / 2)));
+      }
+      shiftCols(QQ);
+
+      QQ = QQ.t();
+      cv::flip(QQ, QQ, 0);
+      displayNormalized("magnitude", QQ);
+
+      shiftCols(phase);
+      phase = phase.t();
+      cv::flip(phase, phase, 0);
+      displayNormalized("phase", phase);
+      cv::waitKey(1);
 
       // for (size_t i = 0; i < numBytes; i++) {
       //   ROS_INFO("%d ", q[i]);
