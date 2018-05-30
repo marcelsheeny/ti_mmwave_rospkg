@@ -141,6 +141,10 @@ int main(int argc, char **argv) {
                     n.setParam("/mmWave_Manager/digOutSampleRate",
                                std::stof(token));
                   }
+                } else if (!cmd.compare("compRangeBiasAndRxChanPhase")) {
+                  if (i == 1) {
+                    n.setParam("/mmWave_Manager/rangeBias", std::stof(token));
+                  }
                 } else if (!cmd.compare("channelCfg")) {
                   if (i == 1) {
                     int binary = std::stoi(token);
@@ -152,8 +156,6 @@ int main(int argc, char **argv) {
                                 ((binary >> 2) & 1) + ((binary >> 3) & 1);
                     n.setParam("/mmWave_Manager/numRxAnt", value);
                   }
-
-                  // std::stoi(token));
                 }
                 srv.request.comm.erase(0, pos + 1);
                 i++;

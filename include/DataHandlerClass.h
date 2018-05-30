@@ -47,6 +47,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <opencv2/opencv.hpp>
 #define COUNT_SYNC_MAX 2
 
 class DataUARTHandler {
@@ -157,6 +158,10 @@ private:
   // params for heatmap
   int numTxAzimAnt;
   int numRxAnt;
+  int rangeBias;
+  bool first_time_heatmap = true;
+  cv::Mat X;
+  cv::Mat Y;
 };
 
 #endif

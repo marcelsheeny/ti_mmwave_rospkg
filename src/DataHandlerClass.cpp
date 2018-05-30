@@ -98,6 +98,7 @@ DataUARTHandler::DataUARTHandler(ros::NodeHandle *nh) {
   // params for heatmap
   nh->getParam("/mmWave_Manager/numRxAnt", numRxAnt);
   nh->getParam("/mmWave_Manager/numTxAzimAnt", numTxAzimAnt);
+  nh->getParam("/mmWave_Manager/rangeBias", rangeBias);
 
   int numChirpsPerFrame = (chirpEndIdx - chirpStartIdx + 1) * numLoops;
 
@@ -303,15 +304,85 @@ void *DataUARTHandler::syncedBufferSwap(void) {
   pthread_exit(NULL);
 }
 
-void displayNormalized(char *header, cv::Mat img) {
+void displayNormalized(char *header, const cv::Mat &img) {
   double min, max;
   cv::minMaxLoc(img, &min, &max);
-  cv::Mat img_n = ((img - min) / (max - min)) * 255.0f;
+  cv::Mat div;
+  cv::divide((img - min), (max - min), div);
+  cv::Mat img_n = (div)*255.0f;
   img_n.convertTo(img_n, CV_8UC1);
   cv::applyColorMap(img_n, img_n, cv::COLORMAP_HOT);
+  // cv::medianBlur(img_n, img_n, 5);
   cv::resize(img_n, img_n, cv::Size(), 3, 3);
   cv::imshow(header, img_n);
 }
+
+template <typename T> std::vector<T> arange(T start, T stop, T step = 1) {
+  std::vector<T> values;
+  for (T value = start; value < stop; value += step)
+    values.push_back(value);
+  return values;
+}
+
+static void meshgrid(const cv::Mat &xgv, const cv::Mat &ygv, cv::Mat &X,
+                     cv::Mat &Y) {
+  cv::repeat(xgv.reshape(1, 1), ygv.total(), 1, X);
+  cv::repeat(ygv.reshape(1, 1).t(), 1, xgv.total(), Y);
+}
+
+template <typename T>
+cv::Mat outer_product(cv::Mat vec1, cv::Mat vec2) { // outer product
+  cv::Mat t = cv::Mat::zeros(vec1.cols, vec2.cols, CV_32F);
+  for (int r = 0; r < vec1.cols; r++) {
+    t(cv::Range(r, r + 1), cv::Range(0, vec2.cols)) = vec2 * vec1.at<T>(r);
+  }
+  return t;
+}
+
+void remap(const cv::Mat &im, const cv::Mat &x, const cv::Mat &y,
+           cv::Mat &output, const int width) {
+  // ROS_INFO("DEBUGa");
+  float ratio = 1.0;
+  float heigth = round(width * ratio);
+  double min_x, max_x;
+  cv::minMaxLoc(x, &min_x, &max_x);
+  cv::Mat div_x;
+  cv::divide((x - min_x), (max_x - min_x), div_x);
+  cv::Mat xx = (div_x * (heigth - 1));
+
+  double min_y, max_y;
+  cv::minMaxLoc(y, &min_y, &max_y);
+  cv::Mat div_y;
+  cv::divide((y - min_y), (max_y - min_y), div_y);
+  cv::Mat yy = (div_y * (width - 1));
+
+  output = cv::Mat(heigth, width, CV_32F);
+  for (size_t i = 0; i < im.rows; i++) {
+    for (size_t j = 0; j < im.cols; j++) {
+
+      output.at<float>(static_cast<int>(floor(xx.at<float>(i, j))),
+                       static_cast<int>(floor(yy.at<float>(i, j)))) =
+          im.at<float>(i, j);
+    }
+  }
+}
+
+// cv::Mat remap(const cv::Mat &im, const cv::Mat &x, const cv::Mat &y,
+//               const int width) {
+//   ratio = 1.3333;
+//   heigth = np.int32(width * ratio);
+//   max_x = np.amax(x[:]);
+//   min_x = np.amin(x[:]);
+//   xx = ((x - min_x) / (max_x - min_x)) * (heigth - 1);
+//
+//   max_y = np.amax(y[:]) min_y = np.amin(y[:]);
+//   yy = ((y - min_y) / (max_y - min_y)) * (width - 1);
+//
+//   output = np.zeros((heigth, width));
+//   output[np.int32(xx), np.int32(yy)] = im;
+//   output = cv2.medianBlur(output.astype(np.uint8), 5);
+//   return np.flipud(output);
+// }
 
 void shiftCols(cv::Mat &QQ) {
   int NUM_ANGLE_BINS = QQ.rows;
@@ -379,9 +450,9 @@ void *DataUARTHandler::sortIncomingData(void) {
              sizeof(mmwData.header.platform));
       currentDatap += (sizeof(mmwData.header.platform));
 
-      // if packet doesn't have correct header size (which is based on platform
-      // and SDK version), throw it away (does not include magicWord since it
-      // was already removed)
+      // if packet doesn't have correct header size (which is based on
+      // platform and SDK version), throw it away (does not include magicWord
+      // since it was already removed)
       if ((((mmwData.header.version >> 24) & 0xFF) < 1) ||
           (((mmwData.header.version >> 16) & 0xFF) <
            1)) // check if SDK version is older than 1.1
@@ -476,9 +547,9 @@ void *DataUARTHandler::sortIncomingData(void) {
       }
       // ROS_INFO("----");
       // ROS_INFO("maxElevationAngleRatioSquared = %f",
-      // maxElevationAngleRatioSquared);  ROS_INFO("maxAzimuthAngleRatio = %f",
-      // maxAzimuthAngleRatio);  ROS_INFO("mmwData.numObjOut before = %d",
-      // mmwData.numObjOut);
+      // maxElevationAngleRatioSquared);  ROS_INFO("maxAzimuthAngleRatio =
+      // %f", maxAzimuthAngleRatio);  ROS_INFO("mmwData.numObjOut before =
+      // %d", mmwData.numObjOut);
 
       // set some parameters for pointcloud
       while (i < mmwData.numObjOut) {
@@ -564,8 +635,8 @@ void *DataUARTHandler::sortIncomingData(void) {
 
         // Keep point if elevation and azimuth angles are less than specified
         // max values (NOTE: The following calculations are done using ROS
-        // standard coordinate system axis definitions where X is forward and Y
-        // is left)
+        // standard coordinate system axis definitions where X is forward and
+        // Y is left)
         if (((maxElevationAngleRatioSquared == -1) ||
              (((RScan->points[i].z * RScan->points[i].z) /
                (RScan->points[i].x * RScan->points[i].x +
@@ -621,10 +692,9 @@ void *DataUARTHandler::sortIncomingData(void) {
       // myfile.open("/home/marcel/catkin_ws/example.txt");
       //
       // for (size_t i = 0; i < 256; i++) {
-      //   // uint16_t value = (uint16_t)currentBufp->at(currentDatap + i * 2);
-      //   uint16_t value;
-      //   memcpy(&value, &currentBufp->at(currentDatap + i * 2),
-      //   sizeof(value)); ROS_INFO("value: %d\n", value); myfile <<
+      //   // uint16_t value = (uint16_t)currentBufp->at(currentDatap + i *
+      //   2); uint16_t value; memcpy(&value, &currentBufp->at(currentDatap +
+      //   i * 2), sizeof(value)); ROS_INFO("value: %d\n", value); myfile <<
       //   static_cast<int>(value); myfile << ",";
       // }
       //
@@ -643,7 +713,8 @@ void *DataUARTHandler::sortIncomingData(void) {
       i = 0;
 
       // while (i++ < tlvLen - 1) {
-      //   // ROS_INFO("DataUARTHandler Sort Thread : Parsing Noise Profile i=%d
+      //   // ROS_INFO("DataUARTHandler Sort Thread : Parsing Noise Profile
+      //   i=%d
       //   // and tlvLen = %u", i, tlvLen);
       // }
 
@@ -669,6 +740,11 @@ void *DataUARTHandler::sortIncomingData(void) {
       int numBytes = numTxAzimAnt * numRxAnt * numRangeBins * 4;
       constexpr int NUM_ANGLE_BINS = 64;
 
+      constexpr int rangeAzimuthHeatMapGrid_points = 100;
+
+      constexpr int range_depth = 10;
+      constexpr int range_width = 5;
+
       unsigned char q[numBytes];
       memcpy(q, &currentBufp->at(currentDatap), numBytes);
 
@@ -676,11 +752,6 @@ void *DataUARTHandler::sortIncomingData(void) {
       //   ROS_INFO("%d", q[i]);
       // }
       // ROS_INFO("%d", numBytes);
-      // ROS_INFO("numBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByte"
-      //          "snumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumByt"
-      //          "esnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBy"
-      //          "tesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumBytesnumB"
-      //          "ytesnumBytes");
 
       int qrows = numTxAzimAnt * numRxAnt;
       int qcols = numRangeBins;
@@ -688,6 +759,7 @@ void *DataUARTHandler::sortIncomingData(void) {
       // ROS_INFO("rows: %d, cols: %d", qrows, qcols);
 
       cv::Mat QQ = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
+      cv::Mat cartQQ;
       cv::Mat phase = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
 
       for (int tmpc = 0; tmpc < qcols; tmpc++) {
@@ -744,20 +816,88 @@ void *DataUARTHandler::sortIncomingData(void) {
         //               .concat(real.slice(0, NUM_ANGLE_BINS / 2)));
       }
       shiftCols(QQ);
-
       QQ = QQ.t();
       cv::flip(QQ, QQ, 0);
-      displayNormalized("magnitude", QQ);
+      // displayNormalized("magnitude", QQ);
 
       shiftCols(phase);
       phase = phase.t();
       cv::flip(phase, phase, 0);
-      displayNormalized("phase", phase);
+      // displayNormalized("phase", phase);
       cv::waitKey(1);
 
-      // for (size_t i = 0; i < numBytes; i++) {
-      //   ROS_INFO("%d ", q[i]);
-      // }
+      // polar to cartesian
+      if (first_time_heatmap == true) {
+
+        int NUM_RANGE_BINS = QQ.rows;
+
+        cv::Mat theta = cv::Mat::zeros(1, NUM_ANGLE_BINS, CV_32F);
+
+        cv::Mat range = cv::Mat::zeros(1, NUM_RANGE_BINS, CV_32F);
+
+        for (int i = -NUM_ANGLE_BINS / 2, cnt = 0; i < NUM_ANGLE_BINS / 2;
+             i++, cnt++) {
+          theta.at<float>(0, cnt) = asin(i * 2.0 / NUM_ANGLE_BINS);
+          // ROS_INFO("bin: %d value: %f", i, theta.at<float>(0, cnt));
+        }
+
+        for (int i = 0; i < NUM_RANGE_BINS; i++) {
+          range.at<float>(0, i) = i * rangeIdxToMeters - rangeBias;
+        }
+
+        // cv::Mat sinTheta = theta.clone();
+        // cv::Mat cosTheta = theta.clone();
+        //
+        // sinTheta.forEach<float>(
+        //     [](float &p, const int *position) -> void { p = sin(p); });
+        //
+        // cosTheta.forEach<float>(
+        //     [](float &p, const int *position) -> void { p = cos(p); });
+        //
+        // cv::Mat posX = outer_product<float>(ranges, sinTheta);
+        // cv::Mat posY = outer_product<float>(ranges, cosTheta);
+        //
+        // X = posX;
+        // Y = posY;
+        // ROS_INFO("posX rows %d", posX.rows);
+        // ROS_INFO("posX cols %d", posX.cols);
+        // ROS_INFO("posY rows %d", posY.rows);
+        // ROS_INFO("posY cols %d", posY.cols);
+
+        cv::Mat angles;
+        cv::Mat ranges;
+        meshgrid(theta, range, angles, ranges);
+        cv::polarToCart(ranges, angles, X, Y);
+
+        // std::vector<float> xrange = arange<float>(
+        //     -range_width, range_width,
+        //     2.0 * range_width / (rangeAzimuthHeatMapGrid_points - 1));
+        //
+        // // ROS_INFO("DEBUG5.5");
+        // cv::Mat rangeAzimuthHeatMapGrid_xlin =
+        //     cv::Mat(1, xrange.size(), CV_32F, xrange.data());
+        // // ROS_INFO("DEBUG6");
+        // std::vector<float> yrange = arange<float>(
+        //     0, range_depth,
+        //     1.0 * range_depth / (rangeAzimuthHeatMapGrid_points - 1));
+        // cv::Mat rangeAzimuthHeatMapGrid_ylin =
+        //     cv::Mat(1, yrange.size(), CV_32F, yrange.data());
+
+        // meshgrid(posX, posY, X, Y);
+
+        first_time_heatmap = false;
+      }
+
+      cv::Mat flipQQ;
+      cv::flip(QQ, flipQQ, 0);
+      remap(flipQQ, X, Y, cartQQ, 128);
+      cv::medianBlur(cartQQ, cartQQ, 7);
+      // ROS_INFO("cartQQ rows %d", cartQQ.rows);
+      // ROS_INFO("cartQQ cols %d", cartQQ.cols);
+      // ROS_INFO("QQ rows %d", QQ.rows);
+      // ROS_INFO("QQ cols %d", QQ.cols);
+
+      displayNormalized("cart magnitude", cartQQ);
 
       currentDatap += tlvLen;
 
@@ -771,8 +911,8 @@ void *DataUARTHandler::sortIncomingData(void) {
       i = 0;
 
       while (i++ < tlvLen - 1) {
-        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Doppler Profile i=%d
-        // and tlvLen = %u", i, tlvLen);
+        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Doppler Profile
+        // i=%d and tlvLen = %u", i, tlvLen);
       }
 
       currentDatap += tlvLen;
