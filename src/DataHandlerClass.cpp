@@ -304,7 +304,8 @@ void *DataUARTHandler::syncedBufferSwap(void) {
   pthread_exit(NULL);
 }
 
-void displayNormalized(char *header, const cv::Mat &img, const int &size) {
+void displayNormalized(char *header, const cv::Mat &img, const int &sizeI,
+                       const int &sizeJ) {
   double min, max;
   cv::minMaxLoc(img, &min, &max);
   cv::Mat div;
@@ -313,7 +314,7 @@ void displayNormalized(char *header, const cv::Mat &img, const int &size) {
   img_n.convertTo(img_n, CV_8UC1);
   cv::applyColorMap(img_n, img_n, cv::COLORMAP_HOT);
   // cv::medianBlur(img_n, img_n, 5);
-  cv::resize(img_n, img_n, cv::Size(), size, size);
+  cv::resize(img_n, img_n, cv::Size(), sizeJ, sizeI);
   cv::imshow(header, img_n);
 }
 
@@ -399,6 +400,22 @@ void shiftCols(cv::Mat &QQ) {
     cv::Mat temp;
     cv::vconcat(temp2, temp1, temp);
     temp.copyTo(QQ.col(tmpc));
+  }
+}
+
+void shiftRows(cv::Mat &QQ) {
+  int NUM_ANGLE_BINS = QQ.rows;
+  int NUM_RANGE_BINS = QQ.cols;
+  for (size_t tmpr = 0; tmpr < NUM_ANGLE_BINS; tmpr++) {
+    cv::Mat temp1 =
+        QQ(cv::Range(tmpr, tmpr + 1), cv::Range(0, NUM_RANGE_BINS / 2));
+
+    cv::Mat temp2 = QQ(cv::Range(tmpr, tmpr + 1),
+                       cv::Range(NUM_RANGE_BINS / 2, NUM_RANGE_BINS));
+
+    cv::Mat temp;
+    cv::hconcat(temp2, temp1, temp);
+    temp.copyTo(QQ.row(tmpr));
   }
 }
 
@@ -746,7 +763,7 @@ void *DataUARTHandler::sortIncomingData(void) {
 
       cv::Mat QQ = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
       cv::Mat cartQQ;
-      cv::Mat phase = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
+      // cv::Mat phase = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
 
       for (int tmpc = 0; tmpc < qcols; tmpc++) {
         cv::Mat real = cv::Mat::zeros(1, NUM_ANGLE_BINS, CV_32F);
@@ -785,13 +802,13 @@ void *DataUARTHandler::sortIncomingData(void) {
           float rng_value = sqrt(real * real + imag * imag);
           float phase_value = atan2(imag, real);
           QQ.at<float>(ri, tmpc) = rng_value;
-          phase.at<float>(ri, tmpc) = phase_value;
+          // phase.at<float>(ri, tmpc) = phase_value;
         }
       }
       shiftCols(QQ);
       QQ = QQ.t();
       cv::flip(QQ, QQ, 0);
-      displayNormalized("magnitude", QQ, 3);
+      displayNormalized("magnitude", QQ, 3, 3);
 
       // shiftCols(phase);
       // phase = phase.t();
@@ -823,17 +840,15 @@ void *DataUARTHandler::sortIncomingData(void) {
         cv::polarToCart(ranges, angles, X, Y);
 
         first_time_heatmap = false;
-
-        ROS_INFO("Init heatmap settings done!");
       }
 
       cv::Mat flipQQ;
       cv::flip(QQ, flipQQ, 0);
       remap(flipQQ, X, Y, cartQQ, 128);
-      cv::medianBlur(cartQQ, cartQQ, 5);
+      cv::medianBlur(cartQQ, cartQQ, 7);
       cv::flip(cartQQ, cartQQ, 0);
-      displayNormalized("cart magnitude", cartQQ, 5);
-      cv::waitKey(1);
+      displayNormalized("Cartesian magnitude", cartQQ, 5, 5);
+      // cv::waitKey(1);
 
       currentDatap += tlvLen;
 
@@ -845,12 +860,24 @@ void *DataUARTHandler::sortIncomingData(void) {
     case READ_DOPPLER: {
 
       i = 0;
+      int numBytes = numDopplerBins * numRangeBins * 2;
 
-      while (i++ < tlvLen - 1) {
-        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Doppler Profile
-        // i=%d and tlvLen = %u", i, tlvLen);
+      unsigned char rangeDopplerTemp[numBytes];
+      memcpy(rangeDopplerTemp, &currentBufp->at(currentDatap), numBytes);
+
+      float rangeDopplerByte[numBytes / 2];
+      for (size_t i = 0, cnt = 0; i <= numBytes; i += 2, cnt++) {
+        rangeDopplerByte[cnt] =
+            rangeDopplerTemp[i] + rangeDopplerTemp[i + 1] * 256.0f;
       }
 
+      cv::Mat rangeDoppler =
+          cv::Mat(numRangeBins, numDopplerBins, CV_32F, rangeDopplerByte);
+
+      shiftRows(rangeDoppler);
+      cv::flip(rangeDoppler, rangeDoppler, 0);
+      displayNormalized("Doppler", rangeDoppler, 3, 20);
+      cv::waitKey(1);
       currentDatap += tlvLen;
 
       sorterState = CHECK_TLV_TYPE;
