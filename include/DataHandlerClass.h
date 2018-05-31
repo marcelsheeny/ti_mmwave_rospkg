@@ -160,6 +160,7 @@ private:
   int numRxAnt;
   int rangeBias;
   bool first_time_heatmap = true;
+  // coordinates polar to cartesian
   cv::Mat X;
   cv::Mat Y;
 };

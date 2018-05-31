@@ -304,7 +304,7 @@ void *DataUARTHandler::syncedBufferSwap(void) {
   pthread_exit(NULL);
 }
 
-void displayNormalized(char *header, const cv::Mat &img) {
+void displayNormalized(char *header, const cv::Mat &img, const int &size) {
   double min, max;
   cv::minMaxLoc(img, &min, &max);
   cv::Mat div;
@@ -313,7 +313,7 @@ void displayNormalized(char *header, const cv::Mat &img) {
   img_n.convertTo(img_n, CV_8UC1);
   cv::applyColorMap(img_n, img_n, cv::COLORMAP_HOT);
   // cv::medianBlur(img_n, img_n, 5);
-  cv::resize(img_n, img_n, cv::Size(), 3, 3);
+  cv::resize(img_n, img_n, cv::Size(), size, size);
   cv::imshow(header, img_n);
 }
 
@@ -729,14 +729,6 @@ void *DataUARTHandler::sortIncomingData(void) {
 
       i = 0;
 
-      // while (i++ < tlvLen - 1) {
-      //   // ROS_INFO("DataUARTHandler Sort Thread : Parsing Azimuth Profile
-      //   i=%d
-      //   // "
-      //   //          "and tlvLen = %u",
-      //   //          i, tlvLen);
-      // }
-
       int numBytes = numTxAzimAnt * numRxAnt * numRangeBins * 4;
       constexpr int NUM_ANGLE_BINS = 64;
 
@@ -748,15 +740,9 @@ void *DataUARTHandler::sortIncomingData(void) {
       unsigned char q[numBytes];
       memcpy(q, &currentBufp->at(currentDatap), numBytes);
 
-      // for (size_t i = 0; i < numBytes; i++) {
-      //   ROS_INFO("%d", q[i]);
-      // }
-      // ROS_INFO("%d", numBytes);
-
       int qrows = numTxAzimAnt * numRxAnt;
       int qcols = numRangeBins;
       int qidx = 0;
-      // ROS_INFO("rows: %d, cols: %d", qrows, qcols);
 
       cv::Mat QQ = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
       cv::Mat cartQQ;
@@ -779,14 +765,6 @@ void *DataUARTHandler::sortIncomingData(void) {
           qidx = qidx + 4;
         }
 
-        // for (size_t i = 0; i < NUM_ANGLE_BINS; i++) {
-        //   ROS_INFO("real %f", real.at<float>(0, i));
-        // }
-        //
-        // for (size_t i = 0; i < NUM_ANGLE_BINS; i++) {
-        //   ROS_INFO("imag %f", imag.at<float>(0, i));
-        // }
-
         // create complex from real and imag
         cv::Mat complexDataPlanes[] = {real, imag};
         cv::Mat complexData;
@@ -806,98 +784,56 @@ void *DataUARTHandler::sortIncomingData(void) {
           float imag = complexRangePlanes[1].at<float>(0, ri);
           float rng_value = sqrt(real * real + imag * imag);
           float phase_value = atan2(imag, real);
-          // ROS_INFO("rng_value %f", rng_value);
-          // QQ.at<float>(ri, tmpc) = 20 * log10(rng_value);
           QQ.at<float>(ri, tmpc) = rng_value;
           phase.at<float>(ri, tmpc) = phase_value;
         }
-        // QQ(cv::Range())
-        //   QQ.push(real.slice(NUM_ANGLE_BINS / 2)
-        //               .concat(real.slice(0, NUM_ANGLE_BINS / 2)));
       }
       shiftCols(QQ);
       QQ = QQ.t();
       cv::flip(QQ, QQ, 0);
-      // displayNormalized("magnitude", QQ);
+      displayNormalized("magnitude", QQ, 3);
 
-      shiftCols(phase);
-      phase = phase.t();
-      cv::flip(phase, phase, 0);
+      // shiftCols(phase);
+      // phase = phase.t();
+      // cv::flip(phase, phase, 0);
       // displayNormalized("phase", phase);
-      cv::waitKey(1);
+      // cv::waitKey(1);
 
       // polar to cartesian
       if (first_time_heatmap == true) {
 
         int NUM_RANGE_BINS = QQ.rows;
 
-        cv::Mat theta = cv::Mat::zeros(1, NUM_ANGLE_BINS, CV_32F);
+        cv::Mat theta = cv::Mat::zeros(1, NUM_ANGLE_BINS, CV_32FC1);
 
-        cv::Mat range = cv::Mat::zeros(1, NUM_RANGE_BINS, CV_32F);
+        cv::Mat range = cv::Mat::zeros(1, NUM_RANGE_BINS, CV_32FC1);
 
         for (int i = -NUM_ANGLE_BINS / 2, cnt = 0; i < NUM_ANGLE_BINS / 2;
              i++, cnt++) {
           theta.at<float>(0, cnt) = asin(i * 2.0 / NUM_ANGLE_BINS);
-          // ROS_INFO("bin: %d value: %f", i, theta.at<float>(0, cnt));
         }
 
         for (int i = 0; i < NUM_RANGE_BINS; i++) {
           range.at<float>(0, i) = i * rangeIdxToMeters - rangeBias;
         }
 
-        // cv::Mat sinTheta = theta.clone();
-        // cv::Mat cosTheta = theta.clone();
-        //
-        // sinTheta.forEach<float>(
-        //     [](float &p, const int *position) -> void { p = sin(p); });
-        //
-        // cosTheta.forEach<float>(
-        //     [](float &p, const int *position) -> void { p = cos(p); });
-        //
-        // cv::Mat posX = outer_product<float>(ranges, sinTheta);
-        // cv::Mat posY = outer_product<float>(ranges, cosTheta);
-        //
-        // X = posX;
-        // Y = posY;
-        // ROS_INFO("posX rows %d", posX.rows);
-        // ROS_INFO("posX cols %d", posX.cols);
-        // ROS_INFO("posY rows %d", posY.rows);
-        // ROS_INFO("posY cols %d", posY.cols);
-
         cv::Mat angles;
         cv::Mat ranges;
         meshgrid(theta, range, angles, ranges);
         cv::polarToCart(ranges, angles, X, Y);
 
-        // std::vector<float> xrange = arange<float>(
-        //     -range_width, range_width,
-        //     2.0 * range_width / (rangeAzimuthHeatMapGrid_points - 1));
-        //
-        // // ROS_INFO("DEBUG5.5");
-        // cv::Mat rangeAzimuthHeatMapGrid_xlin =
-        //     cv::Mat(1, xrange.size(), CV_32F, xrange.data());
-        // // ROS_INFO("DEBUG6");
-        // std::vector<float> yrange = arange<float>(
-        //     0, range_depth,
-        //     1.0 * range_depth / (rangeAzimuthHeatMapGrid_points - 1));
-        // cv::Mat rangeAzimuthHeatMapGrid_ylin =
-        //     cv::Mat(1, yrange.size(), CV_32F, yrange.data());
-
-        // meshgrid(posX, posY, X, Y);
-
         first_time_heatmap = false;
+
+        ROS_INFO("Init heatmap settings done!");
       }
 
       cv::Mat flipQQ;
       cv::flip(QQ, flipQQ, 0);
       remap(flipQQ, X, Y, cartQQ, 128);
-      cv::medianBlur(cartQQ, cartQQ, 7);
-      // ROS_INFO("cartQQ rows %d", cartQQ.rows);
-      // ROS_INFO("cartQQ cols %d", cartQQ.cols);
-      // ROS_INFO("QQ rows %d", QQ.rows);
-      // ROS_INFO("QQ cols %d", QQ.cols);
-
-      displayNormalized("cart magnitude", cartQQ);
+      cv::medianBlur(cartQQ, cartQQ, 5);
+      cv::flip(cartQQ, cartQQ, 0);
+      displayNormalized("cart magnitude", cartQQ, 5);
+      cv::waitKey(1);
 
       currentDatap += tlvLen;
 
