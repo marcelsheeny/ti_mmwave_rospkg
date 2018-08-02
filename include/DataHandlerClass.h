@@ -50,7 +50,8 @@
 #include <opencv2/opencv.hpp>
 #define COUNT_SYNC_MAX 2
 
-class DataUARTHandler {
+class DataUARTHandler
+{
 
 public:
   /*Constructor*/
@@ -160,9 +161,19 @@ private:
   int numRxAnt;
   int rangeBias;
   bool first_time_heatmap = true;
+
   // coordinates polar to cartesian
   cv::Mat X;
   cv::Mat Y;
+
+  // video
+  cv::VideoCapture cap;
+
+  // raw range information
+  cv::Mat QQ;
+
+  // raw doppler information
+  cv::Mat rangeDoppler;
 };
 
 #endif

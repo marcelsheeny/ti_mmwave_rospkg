@@ -61,6 +61,9 @@
 // include OpenCV
 #include <opencv2/opencv.hpp>
 
+// include matplitlib-cpp
+// #include <matplotlibcpp.h>
+
 DataUARTHandler::DataUARTHandler(ros::NodeHandle *nh) {
   this->currentBufp = (&pingPongBuffers[0]);
   this->nextBufp = (&pingPongBuffers[1]);
@@ -115,6 +118,8 @@ DataUARTHandler::DataUARTHandler(ros::NodeHandle *nh) {
            "rangeIdxToM: %f dopplerResToMps: %f numTxAzimAnt: %d numRxAnt: %d",
            numRangeBins, numDopplerBins, rangeIdxToMeters,
            dopplerResolutionToMps, numTxAzimAnt, numRxAnt);
+
+  cap = cv::VideoCapture(0);
 }
 
 /*Implementation of setUARTPort*/
@@ -344,7 +349,7 @@ void remap(const cv::Mat &im, const cv::Mat &x, const cv::Mat &y,
            cv::Mat &output, const int width) {
   // ROS_INFO("DEBUGa");
   float ratio = 1.0;
-  float heigth = round(width * ratio);
+  int heigth = round(width * ratio);
   double min_x, max_x;
   cv::minMaxLoc(x, &min_x, &max_x);
   cv::Mat div_x;
@@ -761,9 +766,9 @@ void *DataUARTHandler::sortIncomingData(void) {
       int qcols = numRangeBins;
       int qidx = 0;
 
-      cv::Mat QQ = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
+      QQ = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
       cv::Mat cartQQ;
-      // cv::Mat phase = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
+      cv::Mat phase = cv::Mat::zeros(NUM_ANGLE_BINS, qcols, CV_32F);
 
       for (int tmpc = 0; tmpc < qcols; tmpc++) {
         cv::Mat real = cv::Mat::zeros(1, NUM_ANGLE_BINS, CV_32F);
@@ -802,18 +807,19 @@ void *DataUARTHandler::sortIncomingData(void) {
           float rng_value = sqrt(real * real + imag * imag);
           float phase_value = atan2(imag, real);
           QQ.at<float>(ri, tmpc) = rng_value;
-          // phase.at<float>(ri, tmpc) = phase_value;
+          phase.at<float>(ri, tmpc) = phase_value;
         }
       }
       shiftCols(QQ);
       QQ = QQ.t();
       cv::flip(QQ, QQ, 0);
-      displayNormalized("magnitude", QQ, 3, 3);
+      // displayNormalized("magnitude", QQ, 3, 3);
+      // cv::waitKey(1);
 
-      // shiftCols(phase);
-      // phase = phase.t();
-      // cv::flip(phase, phase, 0);
-      // displayNormalized("phase", phase);
+      shiftCols(phase);
+      phase = phase.t();
+      cv::flip(phase, phase, 0);
+      // displayNormalized("phase", phase, 3, 3);
       // cv::waitKey(1);
 
       // polar to cartesian
@@ -848,6 +854,11 @@ void *DataUARTHandler::sortIncomingData(void) {
       cv::medianBlur(cartQQ, cartQQ, 7);
       cv::flip(cartQQ, cartQQ, 0);
       displayNormalized("Cartesian magnitude", cartQQ, 5, 5);
+      cv::waitKey(1);
+
+      // cv::Mat frame;
+      // cap >> frame;
+      // cv::imshow("Camera", frame);
       // cv::waitKey(1);
 
       currentDatap += tlvLen;
@@ -871,13 +882,14 @@ void *DataUARTHandler::sortIncomingData(void) {
             rangeDopplerTemp[i] + rangeDopplerTemp[i + 1] * 256.0f;
       }
 
-      cv::Mat rangeDoppler =
+      rangeDoppler =
           cv::Mat(numRangeBins, numDopplerBins, CV_32F, rangeDopplerByte);
 
       shiftRows(rangeDoppler);
       cv::flip(rangeDoppler, rangeDoppler, 0);
       displayNormalized("Doppler", rangeDoppler, 3, 20);
       cv::waitKey(1);
+
       currentDatap += tlvLen;
 
       sorterState = CHECK_TLV_TYPE;
@@ -976,6 +988,8 @@ void *DataUARTHandler::sortIncomingData(void) {
       break;
 
     case SWAP_BUFFERS:
+
+      // publish QQ and rangeDoppler here
 
       pthread_mutex_lock(&countSync_mutex);
       pthread_mutex_unlock(&currentBufp_mutex);
